@@ -1,5 +1,6 @@
 from rest_framework import generics, permissions
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from .models import Prediction
 from .serializers import PredictionSerializer
 from .utils import predict_yield, generate_recommendations
@@ -10,9 +11,8 @@ class PredictionCreateView(generics.CreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
-        """
-        Override create() to calculate yield and recommendations
-        """
+        # Override create() to calculate yield and recommendations
+
         data = request.data
 
         # Convert inputs to float
@@ -58,21 +58,42 @@ class PredictionCreateView(generics.CreateAPIView):
         return Response(response_data)
 
 
-class PredictionListView(generics.ListAPIView):
-    # Returns all predictions for the logged-in user, newest first.
-    serializer_class = PredictionSerializer
+class PredictionListView(APIView):
+
+    # Returns all predictions for the logged-in user, newest first, Including recommendations for each prediction.
+
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        return Prediction.objects.filter(user=self.request.user).order_by('-created_at')
+    def get(self, request):
+        predictions = Prediction.objects.filter(user=request.user).order_by('-created_at')
+        response_list = []
+
+        for pred in predictions:
+            serializer = PredictionSerializer(pred)
+            data = serializer.data
+            data['recommendations'] = generate_recommendations(
+                pred.nitrogen, pred.phosphorus, pred.potassium, pred.ph
+            )
+            response_list.append(data)
+
+        return Response(response_list)
 
 
-class PredictionDetailView(generics.RetrieveAPIView):
-
-    # Returns details for a single prediction.
-
-    serializer_class = PredictionSerializer
+class PredictionDetailView(APIView):
+    
+    #Returns details for a single prediction, including recommendations.
+    
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        return Prediction.objects.filter(user=self.request.user)
+    def get(self, request, pk):
+        try:
+            pred = Prediction.objects.get(pk=pk, user=request.user)
+        except Prediction.DoesNotExist:
+            return Response({"detail": "Prediction not found."}, status=404)
+
+        serializer = PredictionSerializer(pred)
+        data = serializer.data
+        data['recommendations'] = generate_recommendations(
+            pred.nitrogen, pred.phosphorus, pred.potassium, pred.ph
+        )
+        return Response(data)
