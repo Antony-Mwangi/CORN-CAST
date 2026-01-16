@@ -6,13 +6,16 @@ from .serializers import PredictionSerializer
 from .utils import predict_yield, generate_recommendations
 
 
+# ------------------------------
+# Prediction CRUD
+# ------------------------------
+
 class PredictionCreateView(generics.CreateAPIView):
     serializer_class = PredictionSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
         # Override create() to calculate yield and recommendations
-
         data = request.data
 
         # Convert inputs to float
@@ -59,9 +62,10 @@ class PredictionCreateView(generics.CreateAPIView):
 
 
 class PredictionListView(APIView):
-
-    # Returns all predictions for the logged-in user, newest first, Including recommendations for each prediction.
-
+    """
+    Returns all predictions for the logged-in user, newest first,
+    including recommendations for each prediction.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -80,9 +84,9 @@ class PredictionListView(APIView):
 
 
 class PredictionDetailView(APIView):
-    
-    #Returns details for a single prediction, including recommendations.
-    
+    """
+    Returns details for a single prediction, including recommendations.
+    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, pk):
@@ -97,3 +101,96 @@ class PredictionDetailView(APIView):
             pred.nitrogen, pred.phosphorus, pred.potassium, pred.ph
         )
         return Response(data)
+
+
+class PredictionDeleteView(APIView):
+    """
+    Delete a prediction by ID
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk):
+        try:
+            pred = Prediction.objects.get(pk=pk, user=request.user)
+            pred.delete()
+            return Response({"message": "Prediction deleted successfully"})
+        except Prediction.DoesNotExist:
+            return Response({"detail": "Prediction not found"}, status=404)
+
+
+class PredictionUpdateView(APIView):
+    """
+    Update a prediction by ID (inputs only; recalculates yield & recommendations)
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request, pk):
+        try:
+            pred = Prediction.objects.get(pk=pk, user=request.user)
+        except Prediction.DoesNotExist:
+            return Response({"detail": "Prediction not found"}, status=404)
+
+        data = request.data
+
+        # Update fields if provided
+        pred.rainfall = float(data.get('rainfall', pred.rainfall))
+        pred.temperature = float(data.get('temperature', pred.temperature))
+        pred.nitrogen = float(data.get('nitrogen', pred.nitrogen))
+        pred.phosphorus = float(data.get('phosphorus', pred.phosphorus))
+        pred.potassium = float(data.get('potassium', pred.potassium))
+        pred.ph = float(data.get('ph', pred.ph))
+        pred.seed_variety = data.get('seed_variety', pred.seed_variety)
+
+        # Recalculate yield
+        pred.yield_prediction = predict_yield(
+            pred.rainfall, pred.temperature,
+            pred.nitrogen, pred.phosphorus, pred.potassium, pred.ph
+        )
+
+        pred.save()
+
+        serializer = PredictionSerializer(pred)
+        response_data = serializer.data
+        response_data['recommendations'] = generate_recommendations(
+            pred.nitrogen, pred.phosphorus, pred.potassium, pred.ph
+        )
+
+        return Response(response_data)
+
+
+# ------------------------------
+# Dashboard
+# ------------------------------
+
+class DashboardView(APIView):
+    """
+    Returns user dashboard with profile info, predictions, and stats
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        predictions = Prediction.objects.filter(user=user).order_by('-created_at')
+
+        serialized_predictions = []
+        for pred in predictions:
+            data = PredictionSerializer(pred).data
+            data['recommendations'] = generate_recommendations(
+                pred.nitrogen, pred.phosphorus, pred.potassium, pred.ph
+            )
+            serialized_predictions.append(data)
+
+        latest_prediction = predictions.first()
+
+        return Response({
+            "user": {
+                "username": user.username,
+                "email": user.email,
+                "welcome_message": f"Welcome {user.username} 👋"
+            },
+            "stats": {
+                "total_predictions": predictions.count(),
+                "latest_yield": latest_prediction.yield_prediction if latest_prediction else None
+            },
+            "predictions": serialized_predictions
+        })
